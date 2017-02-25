@@ -52,9 +52,7 @@ fn value_to_mustache(value: Value) -> Data {
     return match value {
         Value::Null => Data::StrVal("".to_string()),
         Value::Bool(val) => Data::Bool(val),
-        Value::I64(val) => Data::StrVal(val.to_string()),
-        Value::U64(val) => Data::StrVal(val.to_string()),
-        Value::F64(val) => Data::StrVal(val.to_string()),
+        Value::Number(val) => Data::StrVal(val.to_string()),
         Value::String(val) => Data::StrVal(val.to_string()),
         Value::Array(vector) => {
             let mut _new = Vec::new();
@@ -105,7 +103,7 @@ macro_rules! get_env_var {
 
 macro_rules! email_error {
     ($gid:expr, $error:expr, $connection:expr) => ({
-        let err = serde_json::to_value(&SimpleError{error: $error});
+        let err = serde_json::to_value(&SimpleError{error: $error}).unwrap();
         match $connection.execute(
             sql!("SELECT queue_error(gid := $1, error := $2)"),
             &[&$gid, &err]
@@ -146,9 +144,9 @@ fn handle_email(connection: &Connection, mailer: &mut SmtpTransport, message: Me
             let mut mutvalue : value::Map<String,Value> = value::from_value(value).unwrap();
             mutvalue.insert(
                 "hostname".to_string(),
-                value::to_value(get_env_var!("PMS_BASE_URL", "http://localhost:4242")),
+                value::to_value(get_env_var!("PMS_BASE_URL", "http://localhost:4242")).unwrap(),
             );
-            value::to_value(mutvalue)
+            value::to_value(mutvalue).unwrap()
         },
         None => email_error!(message.gid, format!("Id not found (or no read access)"), connection)
     };
