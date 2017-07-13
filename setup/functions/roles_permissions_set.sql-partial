@@ -1,0 +1,467 @@
+#DROP TYPE IF EXISTS payload_permissions CASCADE;
+
+CREATE OR REPLACE FUNCTION public.roles_permissions_set(token TEXT, roles_id INT, data JSONB)
+ RETURNS JSONB
+ LANGUAGE plpgsql
+AS $function$
+DECLARE
+    rights payload_permissions;
+    _data ALIAS FOR data;
+    _roles_id ALIAS FOR roles_id;
+    kv record;
+    base JSONB;
+    added JSONB;
+    removed JSONB;
+BEGIN
+    rights = permissions_get(token);
+    --since roles_id and people_id are required fields (in create), we won't check for rights->'people_roles'->'create' = '{}'::JSONB 
+    IF rights->'people_roles'->'create'->>'roles_id' = '*' OR rights->'people_roles'->'create'->'roles_id' @> _roles_id::TEXT::JSONB THEN
+        --OK
+    ELSE
+        RAISE EXCEPTION '%', jsonb_error('Cannot alter role since you don\'t have create permissions on roles_id %s', _roles_id::TEXT);
+    END IF;
+    -- get current roles_id permissions, remove permissions that already exist
+
+-- 2 ways: loop over both arrays? assign base to deleted and assign updated to added and remove from both in the loop? can we make it a single loop then?
+    base = roles_permissions_get(rights, _roles_id)->'roles_permissions'->_roles_id::TEXT;
+
+
+
+    input:
+    {"people": {"view": ["asd","existing"]}}
+
+    process:
+    custom & create need special care... (how to handle create: {} null case?) and:
+        "website": {                 
+             "viewLogs": true,        
+             "createPosts": true,     
+             "createEvents": true,    
+             "editTemplateIds": [     
+                 2100,                
+                 2500                 
+             ],                       
+             "maxValueForSomething": [
+                 5                    
+             ]                        
+         },                           
+
+         special data: "*", true, {}
+         regular data: ["string"], [int]
+
+
+    output:
+    {"deleted": {"people": {"create": {}}}, "added": {"people": {"view": ["asd"]}}}
+
+
+    FOR kv IN (SELECT * FROM JSONB_EACH(base))
+    LOOP
+        --add loop for view/etc.
+        array agg(key1) as added, idem(key2) as deleted do full outer join unnest(array) where key1 is null or key2 is null group by key1 is null, key2 is null 
+
+ --- check create stuff, maybe create function, otherwise we have to implement it twice..
+    SELECT
+        ref_table, ref_key, CASE
+            WHEN old IS NOT NULL AND new IS NOT NULL AND JSONB_TYPEOF(old) = 'array' AND JSONB_TYPEOF(old->0) = 'string' THEN (
+                SELECT
+                    (JSONB_AGG(old.n) FILTER (WHERE old.n IS NOT NULL),
+                    JSONB_AGG(new.n) FILTER (WHERE new.n IS NOT NULL))
+                FROM JSONB_ARRAY_ELEMENTS_TEXT(old) old (n)
+                FULL OUTER JOIN JSONB_ARRAY_ELEMENTS_TEXT(new) new (n)
+                ON old.n = new.n WHERE old.n IS NULL OR new.n IS NULL
+            )
+            WHEN old IS NOT NULL AND new IS NOT NULL AND JSONB_TYPEOF(old) = 'array' AND JSONB_TYPEOF(old->0) = 'number' THEN (
+                SELECT
+                    (JSONB_AGG(old.n) FILTER (WHERE old.n IS NOT NULL),
+                    JSONB_AGG(new.n) FILTER (WHERE new.n IS NOT NULL))
+                FROM JSONB_ARRAY_ELEMENTS(old) old (n)
+                FULL OUTER JOIN JSONB_ARRAY_ELEMENTS(new) new (n)
+                ON old.n = new.n WHERE old.n IS NULL OR new.n IS NULL
+            )
+            -- WHEN old IS NOT NULL AND new IS NOT NULL AND ref_key = 'create' AND JSONB_TYPEOF(old) = 'array' AND JSONB_TYPEOF(new) = 'array' THEN (
+
+
+                    SELECT
+                        ref_key, old, new, CASE
+                            WHEN old IS NOT NULL AND new IS NOT NULL AND JSONB_TYPEOF(old) = 'array' AND JSONB_TYPEOF(old->0) = 'number' THEN (
+                                SELECT
+                                    (JSONB_AGG(old.n) FILTER (WHERE old.n IS NOT NULL),
+                                    JSONB_AGG(new.n) FILTER (WHERE new.n IS NOT NULL))
+                                FROM JSONB_ARRAY_ELEMENTS(old) old (n)
+                                FULL OUTER JOIN JSONB_ARRAY_ELEMENTS(new) new (n)
+                                ON old.n = new.n WHERE old.n IS NULL OR new.n IS NULL
+                            )
+                            ELSE (old, new)
+                        END
+                    FROM (
+                        SELECT COALESCE(old.key, new.key) AS ref_key, old.value AS old, new.value AS new
+                        FROM JSONB_EACH('{"roles_id": [5, 8, 9, 4], "people_id": "*", "old-field":[3,4], "eq2": [4,5]}'::JSONB) old
+                        FULL OUTER JOIN JSONB_EACH('{"roles_id": [5], "people_id": "*","new-field":[2], "eq2": [5,4]}'::JSONB) new
+                        ON old.key = new.key WHERE (old.value != new.value OR old.value IS NULL OR new.value IS NULL)
+                    ) alias
+
+
+
+            --     SELECT (
+            --         SELECT (JSONB_OBJECT_AGG(key, old), JSONB_OBJECT_AGG(key, new)) FROM (
+            --             SELECT
+            --                 ref_table AS key, JSONB_AGG(old.n) FILTER (WHERE old.n IS NOT NULL) AS old,
+            --                 JSONB_AGG(new.n) FILTER (WHERE new.n IS NOT NULL) AS new
+            --             FROM JSONB_ARRAY_ELEMENTS(old) old (n)
+            --             FULL OUTER JOIN JSONB_ARRAY_ELEMENTS(new) new (n)
+            --             ON old.n = new.n WHERE old.n IS NULL OR new.n IS NULL
+            --         ) alias
+            --     )
+            --     FROM (
+            --         SELECT
+            --             ref_table, COALESCE(old.key, new.key) AS ref_key, old.value AS old, new.value AS new
+            --         FROM (
+            --             SELECT COALESCE(old.key, new.key) AS ref_table, old.value AS old, new.value AS new
+            --             FROM JSONB_EACH(old) old
+            --             FULL OUTER JOIN JSONB_EACH(new) new
+            --             ON old.key = new.key
+            --         ) alias, JSONB_EACH(old) old FULL OUTER JOIN JSONB_EACH(new) new ON old.key = new.key
+            --     ) alias
+            -- )
+            ELSE (old, new)
+        END
+    FROM (
+        SELECT
+            ref_table, COALESCE(old.key, new.key) AS ref_key, old.value AS old, new.value AS new
+        FROM (
+            SELECT COALESCE(old.key, new.key) AS ref_table, old.value AS old, new.value AS new
+            FROM JSONB_EACH(roles_permissions_get(NULL::payload_permissions, 4)->'roles_permissions'->'4') old
+            FULL OUTER JOIN JSONB_EACH('{"people": {"view": ["random","firstname"]},"website":{"editTemplateIds":[2100]},"people_roles":{"create": {"roles_id": [5], "people_id": "*"}}}'::JSONB) new
+            ON old.key = new.key
+        ) alias, JSONB_EACH(old) old FULL OUTER JOIN JSONB_EACH(new) new ON old.key = new.key
+    ) alias;
+
+                SELECT (
+                    SELECT (JSONB_OBJECT_AGG(key, old), JSONB_OBJECT_AGG(key, new)) FROM (
+                        SELECT
+                            ref_table AS key, JSONB_AGG(old.n) FILTER (WHERE old.n IS NOT NULL) AS old,
+                            JSONB_AGG(new.n) FILTER (WHERE new.n IS NOT NULL) AS new
+                        FROM JSONB_ARRAY_ELEMENTS(old) old (n)
+                        FULL OUTER JOIN JSONB_ARRAY_ELEMENTS(new) new (n)
+                        ON old.n = new.n WHERE old.n IS NULL OR new.n IS NULL
+                    ) alias
+                )
+                FROM (
+
+                    SELECT
+                        ref_table, COALESCE(old.key, new.key) AS ref_key
+                    FROM (
+                        SELECT COALESCE(old.key, new.key) AS ref_table, old.value AS old, new.value AS new
+                        FROM JSONB_EACH('{"roles_id": [5, 8, 9, 4], "people_id": "*"}'::JSONB) old
+                        FULL OUTER JOIN JSONB_EACH('{"roles_id": [5], "people_id": "*"}'::JSONB) new
+                        ON old.key = new.key
+                    ) alias
+,
+                        (
+                            SELECT
+                                (JSONB_AGG(old.n) FILTER (WHERE old.n IS NOT NULL),
+                                JSONB_AGG(new.n) FILTER (WHERE new.n IS NOT NULL))
+                            FROM JSONB_ARRAY_ELEMENTS(old) old (n)
+                            FULL OUTER JOIN JSONB_ARRAY_ELEMENTS(new) new (n)
+                            ON old.n = new.n WHERE old.n IS NULL OR new.n IS NULL
+                        )
+                ) alias
+
+
+--how to filter (,) ? because [4,5] != [5,4]
+                    SELECT
+                        ref_key, old, new, CASE
+                            WHEN old IS NOT NULL AND new IS NOT NULL AND JSONB_TYPEOF(old) = 'array' AND JSONB_TYPEOF(old->0) = 'number' THEN (
+                                SELECT
+                                    (JSONB_AGG(old.n) FILTER (WHERE old.n IS NOT NULL),
+                                    JSONB_AGG(new.n) FILTER (WHERE new.n IS NOT NULL))
+                                FROM JSONB_ARRAY_ELEMENTS(old) old (n)
+                                FULL OUTER JOIN JSONB_ARRAY_ELEMENTS(new) new (n)
+                                ON old.n = new.n WHERE old.n IS NULL OR new.n IS NULL
+                            )
+                            ELSE (old, new)
+                        END
+                    FROM (
+                        SELECT COALESCE(old.key, new.key) AS ref_key, old.value AS old, new.value AS new
+                        FROM JSONB_EACH('{"roles_id": [5, 8, 9, 4], "people_id": "*", "old-field":[3,4], "eq2": [4,5]}'::JSONB) old
+                        FULL OUTER JOIN JSONB_EACH('{"roles_id": [5], "people_id": "*","new-field":[2], "eq2": [5,4]}'::JSONB) new
+                        ON old.key = new.key WHERE (old.value != new.value OR old.value IS NULL OR new.value IS NULL)
+                    ) alias
+
+
+        SELECT
+            ref_table, COALESCE(old.key, new.key) AS ref_key, old.value AS old, new.value AS new
+        FROM (
+            SELECT COALESCE(old.key, new.key) AS ref_table, old.value AS old, new.value AS new
+            FROM JSONB_EACH(roles_permissions_get(NULL::payload_permissions, 4)->'roles_permissions'->'4') old
+            FULL OUTER JOIN JSONB_EACH('{"people": {"view": ["random","firstname"]},"website":{"editTemplateIds":[2100]},"people_roles":{"create": {"roles_id": [5], "people_id": "*"}}}'::JSONB) new
+            ON old.key = new.key
+        ) alias, JSONB_EACH(old) old FULL OUTER JOIN JSONB_EACH(new) new ON old.key = new.key
+
+-[ RECORD 1 ]---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ref_table | roles
+ref_key   | edit
+case      | <NULL>
+-[ RECORD 2 ]---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ref_table | rolesJSONB_EACH(old) old FULL OUTER JOIN JSONB_EACH(new) new ON old.
+ref_key   | create
+case      | <NULL>
+-[ RECORD 3 ]---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ref_table | peopleSONB_EACH(old) old FULL OUTER JOIN JSONB_EACH(new) new ON old.
+ref_key   | edit
+case      | <NULL>
+-[ RECORD 4 ]---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ref_table | people
+ref_key   | view
+case      | ("[""birthdate"", ""boardnotes"", ""cashregister"", ""city"", ""country"", ""deathdate"", ""directdebit"", ""email"", ""emergencyinfo"", ""frontdoor"", ""functions"", ""gender"", ""housenumber"", ""iban"", ""infix"", ""lastname"", ""membertype"", ""mobile"", ""nickname"", ""notes"", ""peoplesince"", ""phone"", ""state"", ""street"", ""zipcode""]","[""random""]")
+-[ RECORD 5 ]---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ref_table | people
+ref_key   | create
+case      | <NULL>
+-[ RECORD 6 ]---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ref_table | website
+ref_key   | viewLogs
+case      | <NULL>
+-[ RECORD 7 ]---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ref_table | website
+ref_key   | createPosts
+case      | <NULL>
+-[ RECORD 8 ]---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ref_table | website
+ref_key   | createEvents
+case      | <NULL>
+-[ RECORD 9 ]---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ref_table | website
+ref_key   | editTemplateIds
+case      | ([2500],)
+-[ RECORD 10 ]--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ref_table | website
+ref_key   | maxValueForSomething
+case      | <NULL>
+-[ RECORD 11 ]--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ref_table | people_roles
+ref_key   | edit
+case      | <NULL>
+-[ RECORD 12 ]--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ref_table | people_roles
+ref_key   | create
+case      | <NULL>
+
+-[ RECORD 1 ]---------------------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------------------------------
+------------------------------------------------------------
+ref_table | roles
+ref_key   | edit
+old       | ["description", "name"]
+new       | <NULL>
+-[ RECORD 2 ]---------------------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------------------------------
+------------------------------------------------------------
+ref_table | roles
+ref_key   | create
+old       | {}
+new       | <NULL>
+-[ RECORD 3 ]---------------------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------------------------------
+------------------------------------------------------------
+ref_table | people
+ref_key   | edit
+old       | ["birthdate", "boardnotes", "cashregister", "city", "country", "deathdate", "directdebit", "email", "emergencyinfo", "
+firstname", "frontdoor", "functions", "gender", "housenumber", "iban", "infix", "lastname", "membertype", "mobile", "nickname", "n
+otes", "peoplesince", "phone", "state", "street", "zipcode"]
+new       | <NULL>
+-[ RECORD 4 ]---------------------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------------------------------
+------------------------------------------------------------
+ref_table | people
+ref_key   | view
+old       | ["birthdate", "boardnotes", "cashregister", "city", "country", "deathdate", "directdebit", "email", "emergencyinfo", "
+firstname", "frontdoor", "functions", "gender", "housenumber", "iban", "infix", "lastname", "membertype", "mobile", "nickname", "n
+otes", "peoplesince", "phone", "state", "street", "zipcode"]
+new       | ["random", "firstname"]
+-[ RECORD 5 ]---------------------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------------------------------
+------------------------------------------------------------
+ref_table | people
+ref_key   | create
+old       | {}
+new       | <NULL>
+
+-[ RECORD 6 ]-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ref_table | website
+ref_key   | viewLogs
+old       | true
+new       | <NULL>
+-[ RECORD 7 ]-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ref_table | website
+ref_key   | createPosts
+old       | true
+new       | <NULL>
+-[ RECORD 8 ]-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ref_table | website
+ref_key   | createEvents
+old       | true
+new       | <NULL>
+-[ RECORD 9 ]-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ref_table | website
+ref_key   | editTemplateIds
+old       | [2500, 2100]
+new       | [2100]
+-[ RECORD 10 ]------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ref_table | website
+ref_key   | maxValueForSomething
+old       | [5]
+new       | <NULL>
+-[ RECORD 11 ]------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ref_table | people_roles
+ref_key   | edit
+old       | ["name"]
+new       | <NULL>
+-[ RECORD 12 ]------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ref_table | people_roles
+ref_key   | create
+old       | {"roles_id": [5, 8, 9, 4], "people_id": "*"}
+new       | {"roles_id": [5], "people_id": "*"}
+
+
+
+                SELECT
+                    COALESCE(old.key, new.key) AS key, old.value AS old, new.value AS new
+                FROM
+                    JSONB_EACH(old) old FULL OUTER JOIN JSONB_EACH(new) new ON old.key = new.key
+
+
+        SELECT
+            ARRAY_AGG(a.n) FILTER (WHERE a.n IS NOT NULL),
+            ARRAY_AGG(b.n) FILTER (WHERE b.n IS NOT NULL)
+        FROM (
+            SELECT JSONB_ARRAY_ELEMENTS_TEXT(roles_permissions_get(NULL::payload_permissions, 1)->'roles_permissions'->'1'->'people'->'view')::TEXT
+        ) a (n)
+        FULL OUTER JOIN (
+            SELECT UNNEST('{email,firstname,newfield}'::TEXT[])
+        ) b (n) ON a.n = b.n WHERE a.n IS NULL OR b.n IS NULL;
+
+
+
+
+        IF createfields->kv.key = '*' OR base ? kv.key AND base->kv.key @> kv.value THEN
+            --OK construct
+        ELSE
+            RAISE EXCEPTION '%', jsonb_error('Removing "%s" value %s not allowed', kv.key, kv.value::TEXT);
+        END IF;
+    END LOOP;
+
+    -- make set: added, deleted
+    -- for rest: loop over each ref_table->permission->field and check if it exists in rights
+
+    IF rights->'people_roles'->'create'->>'roles_id' = '*' OR rights->'people_roles'->'create'->'roles_id' @> _roles_id::TEXT::JSONB THEN
+        --OK
+    ELSE
+        RAISE EXCEPTION '%', jsonb_error('Cannot alter role since you don\'t have create permissions on roles_id %s', _roles_id::TEXT);
+    END IF;
+    
+    -- check if the user has these rights (exlude self)
+    -- check if this is not the last permission being deleted
+    -- check for magic 'admin' role (fuck magic values)
+
+
+   -- allow changing of view and edit rights
+
+    --BEGIN make DRY: if the fucking keys exists is done in data_merge (but not if create: {} / * ... for admin), how do we check for required fields?
+    IF data ? 'people_id' THEN
+        IF (data->>'people_id')::INT != _people_id THEN
+            RAISE EXCEPTION '%', jsonb_error('People id %s in call not equal to id %s in data', _people_id::TEXT, data->>'people_id');
+        END IF;
+    ELSE
+        data = JSONB_SET(data, ARRAY['people_id'], TO_JSON(_people_id)::JSONB);
+    END IF;
+    IF data ? '$ref' THEN
+        _roles_id = SUBSTRING(data->>'$ref', E'^/roles/(\\d+)$')::INT;
+        IF _roles_id IS NULL THEN
+            RAISE EXCEPTION '%', jsonb_error('Reference "%s" not a valid roles reference', data->>'$ref');
+        END IF;
+        IF data ? 'roles_id' THEN
+            IF (data->>'roles_id')::INT != _roles_id THEN
+                RAISE EXCEPTION '%', jsonb_error('Roles id %s in call not equal to id %s in data', _roles_id, data->>'roles_id');
+            END IF;
+        ELSE
+            data = JSONB_SET(data, ARRAY['roles_id'], TO_JSON(_roles_id)::JSONB);
+        END IF;
+    ELSEIF NOT data ? 'roles_id' THEN
+        RAISE EXCEPTION '%', jsonb_error('Must supply reference to a roles id or a direct roles id in data');
+    ELSE
+        _roles_id = (data->>'roles_id')::INT;
+    END IF;
+    --END make DRY
+
+    _data = remove_base(data_merge(
+        rights := rights,
+        ref_table := 'people_roles',
+        --base := people_get(rights, people_id)->'people'->people_id::TEXT,
+        update := _data - '$ref'
+    ));
+
+    --BEGIN make DRY: 
+    PERFORM FROM people_roles pr WHERE valid_till IS NULL AND pr.people_id = _people_id AND roles_id = _roles_id;
+    IF FOUND THEN
+        RAISE EXCEPTION '%', jsonb_error('Relation already exist');
+    END IF;
+    --END make DRY
+
+    --BEGIN make DRY: 
+    PERFORM FROM people p WHERE valid_till IS NULL AND p.id = _people_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION '%', jsonb_error('People id %s does not exist', _people_id);
+    END IF;
+    PERFORM FROM roles r WHERE valid_till IS NULL AND r.id = _roles_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION '%', jsonb_error('Roles id %s does not exist', _roles_id);
+    END IF;
+    --END make DRY
+
+    INSERT INTO people_roles (people_id, roles_id, modified_by, data)
+        VALUES (_people_id, _roles_id, (rights.payload->>'user')::INT, _data - 'people_id' - 'roles_id');
+
+    RETURN people_get(rights, people_id);
+
+
+    SELECT JSONB_BUILD_OBJECT('roles_permissions', JSONB_OBJECT_AGG(key, value)) INTO permissions FROM (
+        SELECT r_id AS key, JSONB_OBJECT_AGG(key, value) AS value FROM (
+            SELECT r_id, ref_table AS key, JSONB_STRIP_NULLS(COALESCE(JSONB_OBJECT_AGG(key, value) FILTER (WHERE NOT "create"), '{}'::JSONB)
+                || JSONB_BUILD_OBJECT('create', CASE
+                        WHEN COUNT(*) FILTER (WHERE "create" AND key IS NULL) > 0 THEN '{}'::JSONB
+                        ELSE JSONB_OBJECT_AGG(key, value) FILTER (WHERE "create" AND key IS NOT NULL)
+                    END)
+                ) AS value
+            FROM (
+                SELECT
+                    r.id AS r_id,
+                    pm.ref_table,
+                    CASE
+                        WHEN type IN ('custom'::permissions_type, 'create'::permissions_type) THEN ref_key
+                        ELSE type::TEXT
+                    END AS key,
+                    type = 'create'::permissions_type AS "create",
+                    CASE
+                        WHEN type IN ('view'::permissions_type, 'edit'::permissions_type) THEN
+                            JSONB_AGG(DISTINCT f.name)
+                        WHEN type = 'create'::permissions_type THEN
+                            CASE WHEN JSONB_AGG(ref_value) @> 'null'::JSONB THEN '"*"'::JSONB ELSE JSONB_AGG(ref_value) END
+                        WHEN type = 'custom'::permissions_type THEN
+                            COALESCE(NULLIF(JSONB_AGG(ref_value),'[null]'), 'true'::JSONB)
+                    END AS value
+                FROM permissions pm
+                    JOIN roles_permissions rpm ON pm.id = rpm.permissions_id AND pm.valid_till IS NULL AND rpm.valid_till IS NULL
+                    JOIN roles r ON r.id = rpm.roles_id AND r.valid_till IS NULL
+                    JOIN people_roles pr ON (pr.roles_id = r.id OR r.name = 'self') AND pr.valid_till IS NULL
+                    --JOIN people p ON pr.people_id = p.id AND p.id = _self_id AND (r.name != 'self' OR _people_id = _self_id) AND p.valid_till IS NULL
+                    LEFT JOIN fields f ON pm.ref_key = 'fields' AND pm.ref_value = f.id AND f.valid_till IS NULL
+                GROUP BY r_id, pm.ref_table, pm.type, pm.ref_key
+            ) alias
+            GROUP BY r_id, ref_table
+        ) alias
+        GROUP BY r_id
+    ) alias;
+    RETURN permissions;
+END;
+$function$;
+

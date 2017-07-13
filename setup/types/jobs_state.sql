@@ -1,0 +1,1 @@
+CREATE TYPE jobs_state AS ENUM ('queued', 'processing', 'success', 'error');

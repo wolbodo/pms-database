@@ -1,0 +1,9 @@
+CREATE OR REPLACE FUNCTION public.jsonb_error(format TEXT, VARIADIC args ANYARRAY DEFAULT ARRAY[]::INTEGER[])
+ RETURNS JSONB
+ LANGUAGE plpgsql
+ IMMUTABLE
+AS $function$
+BEGIN
+    RETURN JSONB_BUILD_OBJECT('error', FORMAT(format, VARIADIC args));
+END
+$function$;

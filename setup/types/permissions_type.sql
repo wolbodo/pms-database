@@ -1,0 +1,1 @@
+CREATE TYPE permissions_type AS ENUM ('view', 'edit', 'create', 'custom');
