@@ -1,1 +1,3 @@
 email_worker/.env
+email_worker/Cargo.lock
+email_worker/target/

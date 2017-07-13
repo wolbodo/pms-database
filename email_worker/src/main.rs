@@ -1,4 +1,4 @@
-#![feature(custom_derive, plugin, proc_macro)] #![plugin(postgres_macros)]
+#![feature(custom_derive, plugin)] #![plugin(postgres_macros)]
 
 extern crate postgres;
 extern crate fallible_iterator;
