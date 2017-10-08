@@ -23,7 +23,7 @@ go get github.com/oelmekki/pgrebase
 ```
 sudo -u postgres psql -X -c 'CREATE DATABASE pms WITH OWNER pms;'
 sudo -u postgres psql -d pms -X -c 'CREATE EXTENSION pgcrypto;'
-cat setup/sequences/* setup/tabletypes/* setup/tables/* setup/indices/* | sudo -u pms psql -X
+cat setup/sequences/*.sql setup/types/*.sql setup/tables/*.sql setup/indices/*.sql setup/functions/*.sql setup/triggers/*.sql | sudo -u pms psql -X
 sudo -u pms DATABASE_URL=' ' PGHOST='/run/postgresql' pgrebase setup/
 ```
 # | sed "s/:'token_sha256_key'/'$(openssl rand -hex 64)'/g"
